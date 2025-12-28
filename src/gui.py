@@ -132,6 +132,11 @@ class MainWindow(QMainWindow):
             if success:
                 QMessageBox.information(self, "Export Successful", msg)
                 self.statusBar().showMessage("Export Completed")
+                # Auto-open the file
+                try:
+                    os.startfile("ExcelDBManager.xlsx")
+                except Exception as e:
+                    self.statusBar().showMessage(f"Could not open file: {e}")
             else:
                 QMessageBox.critical(self, "Export Failed", msg)
                 self.statusBar().showMessage("Export Failed")

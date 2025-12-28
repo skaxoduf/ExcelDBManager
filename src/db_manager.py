@@ -30,18 +30,38 @@ class DBManager:
         
         inspector = inspect(self.engine)
         columns = inspector.get_columns(table_name)
+        pk_constraint = inspector.get_pk_constraint(table_name)
+        pk_columns = pk_constraint.get('constrained_columns', [])
+
+        processed_cols = []
+        for col in columns:
+            col_type = col['type']
+            length = getattr(col_type, 'length', None)
+            
+            # Clean Data Type: Extract class name (e.g. VARCHAR, INTEGER) to avoid "VARCHAR(64) ..."
+            # SQLAlchemy reflection returns types like VARCHAR, INTEGER, etc.
+            try:
+                # __visit_name__ usually holds the SQL type name (e.g. 'varchar', 'integer')
+                type_name = col_type.__visit_name__.upper()
+            except:
+                # Fallback
+                type_name = type(col_type).__name__.upper()
+            
+            c_info = {
+                'Table': table_name,
+                'Column Name': col['name'],
+                'Data Type': type_name, 
+                'Length': length if length else '', 
+                'PK': 'Y' if col['name'] in pk_columns else '',
+                'Allow Null': 'Y' if col['nullable'] else 'N',
+                'Default Value': col.get('default', '')
+            }
+            # Clean up default value (sometimes it comes as object)
+            if c_info['Default Value'] is None: c_info['Default Value'] = ''
+            
+            processed_cols.append(c_info)
         
-        # Convert to DataFrame for easy handling
-        df = pd.DataFrame(columns)
-        # Expected cols: name, type, nullable, default, autoincrement, etc.
-        
-        # Simplify Type to string
-        df['type'] = df['type'].apply(lambda x: str(x))
-        
-        # Add 'table_name' column for aggregation later if needed
-        df['table_name'] = table_name
-        
-        return df
+        return pd.DataFrame(processed_cols)
 
     def get_all_schemas(self):
         """Iterates over all tables and gathers their column info."""
