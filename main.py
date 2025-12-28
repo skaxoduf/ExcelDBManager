@@ -15,6 +15,7 @@ except ImportError as e:
 
 def main():
     app = QApplication(sys.argv)
+    # 주석테스트 
     
     login = LoginDialog()
     if login.exec() == LoginDialog.DialogCode.Accepted:
