@@ -13,6 +13,13 @@ class LoginDialog(QDialog):
         self.setWindowTitle("MSSQL Database Connection")
         self.setFixedSize(400, 250)
         self.db_manager = None
+        self.center_window()
+
+    def center_window(self):
+        qr = self.frameGeometry()
+        cp = self.screen().availableGeometry().center()
+        qr.moveCenter(cp)
+        self.move(qr.topLeft())
 
         layout = QVBoxLayout()
         form_layout = QFormLayout()
@@ -95,6 +102,14 @@ class MainWindow(QMainWindow):
         self.db_manager = db_manager
         self.setWindowTitle("Excel DB Manager")
         self.setGeometry(100, 100, 800, 600)
+        self.center_window()   
+
+    # 폼이 모니터 가운데에 위치..   
+    def center_window(self):
+        qr = self.frameGeometry()
+        cp = self.screen().availableGeometry().center()
+        qr.moveCenter(cp)
+        self.move(qr.topLeft())
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
