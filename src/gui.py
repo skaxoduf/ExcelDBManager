@@ -2,6 +2,7 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                             QLabel, QLineEdit, QPushButton, QMessageBox, QDialog, QFormLayout)
 from src.db_manager import DBManager
 from src.excel_handler import ExcelHandler
+from src.crypto_utils import CryptoManager
 import configparser
 import os
 
@@ -59,20 +60,37 @@ class LoginDialog(QDialog):
         if os.path.exists(CONFIG_FILE):
             config.read(CONFIG_FILE)
             if 'MSSQL' in config:
-                self.server_input.setText(config['MSSQL'].get('Server', ''))
-                self.db_input.setText(config['MSSQL'].get('Database', ''))
                 self.user_input.setText(config['MSSQL'].get('User', ''))
-                # For security, password saving is often optional, but for internal tools user might want it.
-                # Let's save it for convenience as requested.
-                self.password_input.setText(config['MSSQL'].get('Password', ''))
+                
+                # Decrypt password and other fields if they are encrypted
+                # For this transition, we'll try to decrypt, if empty (meaning it was plain text or invalid),
+                # we might need to handle it. But per request, we assume full encryption.
+                # Let's fully implement decryption here.
+                
+                crypto = CryptoManager()
+                
+                # Helper to safely get and decrypt
+                def get_decrypted(key):
+                    val = config['MSSQL'].get(key, '')
+                    decrypted = crypto.decrypt(val)
+                    # Fallback: if decryption returns empty but val wasn't, it might be legacy plain text.
+                    # Ideally we migrate. For now let's show decrypted.
+                    return decrypted if decrypted else val
+
+                self.server_input.setText(get_decrypted('Server'))
+                self.db_input.setText(get_decrypted('Database'))
+                self.user_input.setText(get_decrypted('User'))
+                self.password_input.setText(get_decrypted('Password'))
 
     def save_config(self, server, db, user, password):
         config = configparser.ConfigParser()
+        crypto = CryptoManager()
+        
         config['MSSQL'] = {
-            'Server': server,
-            'Database': db,
-            'User': user,
-            'Password': password
+            'Server': crypto.encrypt(server),
+            'Database': crypto.encrypt(db),
+            'User': crypto.encrypt(user),
+            'Password': crypto.encrypt(password)
         }
         with open(CONFIG_FILE, 'w') as configfile:
             config.write(configfile)
