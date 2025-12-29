@@ -96,3 +96,89 @@ class DBManager:
         except Exception as e:
             print(f"Error fetching routines: {e}")
             return pd.DataFrame()
+
+    def sync_schema(self, excel_df):
+        """
+        Syncs Excel schema changes to DB.
+        """
+        if not self.engine: return False, ["Not connected."]
+        
+        logs = []
+        
+        with self.engine.connect() as conn:
+            trans = conn.begin()
+            try:
+                # Group by table
+                for table_name, group in excel_df.groupby('Table'):
+                    # Fetch current schema for this table from DB to verify
+                    # Note: calling get_table_schema uses a fresh inspector, which is fine
+                    current_df = self.get_table_schema(table_name)
+                    if current_df.empty: continue 
+                    
+                    # Convert to dict for lookup
+                    curr_map = {row['Column Name']: row for _, row in current_df.iterrows()}
+                    
+                    for _, row in group.iterrows():
+                        col = row['Column Name']
+                        if col not in curr_map: continue # Skip new cols
+                        
+                        curr = curr_map[col]
+                        
+                        # -- Prepare New attributes (from Excel) --
+                        new_type = str(row['Data Type']).strip().upper()
+                        
+                        raw_new_len = str(row['Length']).strip()
+                        if raw_new_len.lower() in ['nan', 'none', '']: 
+                            new_len = ''
+                        else:
+                            # Handle '50.0' string from float conversion
+                            try:
+                                new_len = str(int(float(raw_new_len)))
+                            except:
+                                new_len = raw_new_len
+
+                        # -- Prepare Old attributes (from DB) --
+                        old_type = str(curr['Data Type']).strip().upper()
+                        
+                        raw_old_len = str(curr['Length']).strip()
+                        if raw_old_len.lower() in ['nan', 'none', '']:
+                            old_len = ''
+                        else:
+                            try:
+                                old_len = str(int(float(raw_old_len)))
+                            except:
+                                old_len = raw_old_len
+
+                        # -- Compare --
+                        # Only compare length if type supports it to avoid false positives on INT/DATE
+                        types_with_len = ['VARCHAR', 'NVARCHAR', 'CHAR', 'NCHAR', 'VARBINARY']
+                        
+                        is_diff = False
+                        if new_type != old_type:
+                            is_diff = True
+                        elif new_type in types_with_len and new_len != old_len:
+                            is_diff = True
+                            
+                        if is_diff:
+                            # Build SQL
+                            type_def = new_type
+                            if new_type in types_with_len and new_len:
+                                type_def = f"{new_type}({new_len})"
+                            elif new_type in ['DECIMAL', 'NUMERIC'] and new_len:
+                                type_def = f"{new_type}({new_len})"
+
+                            # Nullability (Preserve existing)
+                            null_def = "NULL" if curr['Allow Null'] == 'Y' else "NOT NULL"
+                            
+                            sql = f"ALTER TABLE [{table_name}] ALTER COLUMN [{col}] {type_def} {null_def}"
+                            
+                            print(f"Executing: {sql}")
+                            conn.execute(text(sql))
+                            logs.append(f"Updated [{table_name}].[{col}]: {old_type}({old_len}) -> {type_def}")
+
+                trans.commit()
+                return True, logs if logs else ["No changes detected."]
+            except Exception as e:
+                trans.rollback()
+                print(f"Sync Error: {e}")
+                return False, [str(e)]

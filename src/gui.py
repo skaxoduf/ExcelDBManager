@@ -116,7 +116,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central_widget)
 
 
-        label = QLabel(f"Connected to: {db_manager.connection_string.split('@')[1]}") # Simple display
+        label = QLabel(f"Connected to: {self.db_manager.connection_string.split('@')[1]}") # Simple display
         layout.addWidget(label)
         
         # Action Buttons
@@ -124,7 +124,7 @@ class MainWindow(QMainWindow):
         self.export_btn = QPushButton("Export Schema to Excel")
         self.export_btn.clicked.connect(self.export_schema)
         self.sync_btn = QPushButton("Sync Excel to DB")
-        # self.sync_btn.clicked.connect(self.sync_schema) # To be implemented
+        self.sync_btn.clicked.connect(self.sync_schema)
         
         btn_layout.addWidget(self.export_btn)
         btn_layout.addWidget(self.sync_btn)
@@ -158,4 +158,49 @@ class MainWindow(QMainWindow):
                 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"An unexpected error occurred: {e}")
+            self.statusBar().showMessage("Error")
+
+    def sync_schema(self):
+        reply = QMessageBox.question(self, 'Sync Confirmation', 
+                                     "This will update the database schema based on the Excel file.\n"
+                                     "Are you sure you want to proceed?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, 
+                                     QMessageBox.StandardButton.No)
+        
+        if reply == QMessageBox.StandardButton.No:
+            return
+
+        self.statusBar().showMessage("Syncing schema from Excel...")
+        
+        try:
+            # 1. Read Excel
+            handler = ExcelHandler()
+            df = handler.read_schema()
+            
+            if df is None:
+                QMessageBox.warning(self, "Error", "Could not read 'ExcelDBManager.xlsx'.\nMake sure the file exists and is not open.")
+                self.statusBar().showMessage("Sync Failed")
+                return
+                
+            if df.empty:
+                QMessageBox.warning(self, "Error", "Excel file seems empty.")
+                self.statusBar().showMessage("Sync Failed")
+                return
+
+            # 2. Sync
+            success, logs = self.db_manager.sync_schema(df)
+            
+            if success:
+                # Show detailed logs if any
+                msg = "\n".join(logs)
+                if len(msg) > 500: msg = msg[:500] + "\n...(truncated)"
+                
+                QMessageBox.information(self, "Sync Successful", f"Database updated successfully.\n\nChanges:\n{msg}")
+                self.statusBar().showMessage("Sync Completed")
+            else:
+                QMessageBox.critical(self, "Sync Failed", f"Errors occurred:\n{logs[0]}")
+                self.statusBar().showMessage("Sync Failed")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Unexpected error: {e}")
             self.statusBar().showMessage("Error")
