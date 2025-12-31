@@ -13,10 +13,10 @@ class DBManager:
             self.engine = create_engine(self.connection_string)
             with self.engine.connect() as conn:
                 print("Connection successful!")
-            return True
+            return True, ""
         except Exception as e:
             print(f"Error connecting: {e}")
-            return False
+            return False, str(e)
 
     def get_tables(self):
         """Returns a list of all table names in the database."""
@@ -100,29 +100,52 @@ class DBManager:
     def sync_schema(self, excel_df):
         """
         Syncs Excel schema changes to DB.
+        Refactored to pre-fetch schema to avoid locking issues.
         """
         if not self.engine: return False, ["Not connected."]
         
         logs = []
         
+        # 1. Pre-fetch ALL current schemas from DB (Lock-free Read)
+        # We fetch everything first so we don't need to open new connections 
+        # while holding a transaction lock later.
+        try:
+            current_schemas = {}
+            tables = self.get_tables()
+            for t in tables:
+                current_schemas[t] = self.get_table_schema(t)
+        except Exception as e:
+            return False, [f"Error fetching current schema: {e}"]
+
+        # 2. Start Transaction for updates
         with self.engine.connect() as conn:
+            # Set lock timeout to avoid infinite hangs (e.g., 5 seconds)
+            try:
+                conn.execute(text("SET LOCK_TIMEOUT 5000")) 
+            except:
+                pass # Some DBs might not support this
+
             trans = conn.begin()
             try:
                 # Group by table
+                excel_tables = excel_df['Table'].unique()
+                
                 for table_name, group in excel_df.groupby('Table'):
-                    # Fetch current schema for this table from DB to verify
-                    # Note: calling get_table_schema uses a fresh inspector, which is fine
-                    current_df = self.get_table_schema(table_name)
-                    if current_df.empty: continue 
+                    
+                    # Fetch pre-loaded schema
+                    current_df = current_schemas.get(table_name)
+                    
+                    # If table logic needs to handle NEW TABLES (not implemented yet, but for safety)
+                    if current_df is None or current_df.empty: 
+                        # New table creation is complex, currently skipping or could implement CREATE TABLE
+                        # For now, skipping as per previous logic (only ALTER/ADD/DROP cols)
+                        continue 
                     
                     # Convert to dict for lookup
                     curr_map = {row['Column Name']: row for _, row in current_df.iterrows()}
                     
                     for _, row in group.iterrows():
                         col = row['Column Name']
-                        if col not in curr_map: continue # Skip new cols
-                        
-                        curr = curr_map[col]
                         
                         # -- Prepare New attributes (from Excel) --
                         new_type = str(row['Data Type']).strip().upper()
@@ -131,12 +154,33 @@ class DBManager:
                         if raw_new_len.lower() in ['nan', 'none', '']: 
                             new_len = ''
                         else:
-                            # Handle '50.0' string from float conversion
                             try:
                                 new_len = str(int(float(raw_new_len)))
                             except:
                                 new_len = raw_new_len
+                                
+                        # Construct type definition
+                        type_def = new_type
+                        if new_type in ['VARCHAR', 'NVARCHAR', 'CHAR', 'NCHAR', 'VARBINARY'] and new_len:
+                            type_def = f"{new_type}({new_len})"
+                        elif new_type in ['DECIMAL', 'NUMERIC'] and new_len:
+                            type_def = f"{new_type}({new_len})"
 
+                        # Nullability
+                        null_val = str(row['Allow Null']).strip().upper()
+                        null_def = "NULL" if null_val == 'Y' else "NOT NULL"
+
+                        # 1. ADD Column (If not in DB)
+                        if col not in curr_map:
+                            sql = f"ALTER TABLE [{table_name}] ADD [{col}] {type_def} {null_def}"
+                            print(f"Executing: {sql}")
+                            conn.execute(text(sql))
+                            logs.append(f"Added Column [{table_name}].[{col}] ({type_def})")
+                            continue
+                        
+                        # 2. MATCH/MODIFY Existing
+                        curr = curr_map[col]
+                        
                         # -- Prepare Old attributes (from DB) --
                         old_type = str(curr['Data Type']).strip().upper()
                         
@@ -149,10 +193,8 @@ class DBManager:
                             except:
                                 old_len = raw_old_len
 
-                        # -- Compare --
-                        # Only compare length if type supports it to avoid false positives on INT/DATE
+                        # Check differences
                         types_with_len = ['VARCHAR', 'NVARCHAR', 'CHAR', 'NCHAR', 'VARBINARY']
-                        
                         is_diff = False
                         if new_type != old_type:
                             is_diff = True
@@ -160,22 +202,22 @@ class DBManager:
                             is_diff = True
                             
                         if is_diff:
-                            # Build SQL
-                            type_def = new_type
-                            if new_type in types_with_len and new_len:
-                                type_def = f"{new_type}({new_len})"
-                            elif new_type in ['DECIMAL', 'NUMERIC'] and new_len:
-                                type_def = f"{new_type}({new_len})"
-
-                            # Nullability (Preserve existing)
-                            null_def = "NULL" if curr['Allow Null'] == 'Y' else "NOT NULL"
-                            
                             sql = f"ALTER TABLE [{table_name}] ALTER COLUMN [{col}] {type_def} {null_def}"
-                            
                             print(f"Executing: {sql}")
                             conn.execute(text(sql))
                             logs.append(f"Updated [{table_name}].[{col}]: {old_type}({old_len}) -> {type_def}")
 
+                    # 3. DROP Column (If in DB but not in Excel)
+                    excel_cols = set(group['Column Name'])
+                    db_cols = set(curr_map.keys())
+                    dropped_cols = db_cols - excel_cols
+                    
+                    for d_col in dropped_cols:
+                        sql = f"ALTER TABLE [{table_name}] DROP COLUMN [{d_col}]"
+                        print(f"Executing: {sql}")
+                        conn.execute(text(sql))
+                        logs.append(f"Dropped Column [{table_name}].[{d_col}]")
+                        
                 trans.commit()
                 return True, logs if logs else ["No changes detected."]
             except Exception as e:

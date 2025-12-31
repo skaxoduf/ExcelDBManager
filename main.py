@@ -15,6 +15,45 @@ except ImportError as e:
 
 def main():
     app = QApplication(sys.argv)
+    
+    # Apply Premium Dark Mode Stylesheet
+    dark_style = """
+    QWidget {
+        background-color: #2b2b2b;
+        color: #e0e0e0;
+        font-family: 'Segoe UI', sans-serif;
+        font-size: 10pt;
+    }
+    QLineEdit {
+        background-color: #3a3a3a;
+        border: 1px solid #555;
+        border-radius: 5px;
+        padding: 5px;
+        selection-background-color: #3d8ec9;
+    }
+    QPushButton {
+        background-color: #3d8ec9;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        padding: 8px 16px;
+        font-weight: bold;
+    }
+    QPushButton:hover {
+        background-color: #2b7ab0;
+    }
+    QPushButton:pressed {
+        background-color: #1a5c85;
+    }
+    QMessageBox {
+        background-color: #2b2b2b;
+    }
+    QLabel {
+        font-weight: bold;
+    }
+    """
+    app.setStyleSheet(dark_style)
+    
     # 주석테스트 
     
     login = LoginDialog()
